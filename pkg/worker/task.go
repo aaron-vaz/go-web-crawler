@@ -18,6 +18,7 @@ const (
 type TaskResult struct {
 	url   *url.URL
 	links []*url.URL
+	retry bool
 }
 
 func (tr TaskResult) FormatResult() string {
@@ -35,33 +36,31 @@ func (tr TaskResult) FormatResult() string {
 }
 
 type Task struct {
-	url     *url.URL
-	links   chan<- *url.URL
+	links   <-chan *url.URL
 	results chan<- TaskResult
 
 	wc crawler.WebCrawler
 }
 
 func (t Task) Run() {
-	links, err := t.wc.Crawl(t.url)
+	for link := range t.links {
+		log.Printf("Crawling %s", link)
+		links, err := t.wc.Crawl(link)
 
-	if errors.Is(err, httpservice.TooManyRequestsError) {
-		time.Sleep(backOffTimeout)
+		if errors.Is(err, httpservice.TooManyRequestsError) {
+			time.Sleep(backOffTimeout)
 
-		// if we are enable to continue due to rate limiting then we should sleep for a bit
-		// after the sleep we return the same link again so that it can be tried again
-		t.links <- t.url
-		return
+			// if we are enable to continue due to rate limiting then we should sleep for a bit
+			// after the sleep we return the same link again so that it can be tried again
+			t.results <- TaskResult{url: link, retry: true}
+			continue
+		}
+
+		if err != nil {
+			log.Printf("Unable to crawl url = %s", link)
+			continue
+		}
+
+		t.results <- TaskResult{url: link, links: links}
 	}
-
-	if err != nil {
-		log.Printf("Unable to crawl url = %s", t.url)
-		return
-	}
-
-	for _, link := range links {
-		t.links <- link
-	}
-
-	t.results <- TaskResult{url: t.url, links: links}
 }

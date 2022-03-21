@@ -37,8 +37,10 @@ func (app *App) Run() {
 
 func main() {
 	var startURL string
+	var maxWorkers int
 
 	flag.StringVar(&startURL, "startURL", "", "Crawler starting url, required")
+	flag.IntVar(&maxWorkers, "maxWorkers", 10, "Max workers to use to perform the crawling")
 
 	flag.Parse()
 
@@ -56,7 +58,7 @@ func main() {
 	hs := httpservice.NewHttpService(http.DefaultClient)
 	ls := linksservice.NewLinksParser()
 	wc := crawler.NewWebCrawler(hs, ls)
-	td := worker.NewTaskDispactcher(startURLParsed, wc)
+	td := worker.NewTaskDispactcher(startURLParsed, maxWorkers, wc)
 
 	app := &App{td: td}
 

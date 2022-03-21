@@ -23,38 +23,54 @@ func resetTimer(timer *time.Timer) {
 }
 
 type TaskDispactcher struct {
-	startURL *url.URL
-	wc       crawler.WebCrawler
+	startURL   *url.URL
+	maxWorkers int
+
+	wc crawler.WebCrawler
 }
 
 func (td *TaskDispactcher) Start() []TaskResult {
 	results := []TaskResult{}
 
-	links := make(chan *url.URL, 100)
+	links := make(chan *url.URL)
 	taskResults := make(chan TaskResult)
 
-	td.runTaskAsync(td.startURL, links, taskResults)
+	td.startTasks(links, taskResults)
+
+	links <- td.startURL
 
 	idleTimer := time.NewTimer(idleTimeout)
 	for {
 		select {
 
-		case link := <-links:
-			filteredLink := td.filterLink(link)
-			if filteredLink == nil {
-				continue
-			}
-
-			td.runTaskAsync(filteredLink, links, taskResults)
-
+		case taskResult := <-taskResults:
 			resetTimer(idleTimer)
 
-		case result := <-taskResults:
-			visitedLinks.Store(result.url, result.url)
-			results = append(results, result)
+			log.Printf("Got result = %+v", taskResult)
+
+			if taskResult.retry {
+				links <- taskResult.url
+				break
+			}
+
+			visitedLinks.Store(taskResult.url.String(), taskResult.url)
+			results = append(results, taskResult)
+
+			for _, link := range taskResult.links {
+				filteredLink := td.filterLink(link)
+				if filteredLink == nil {
+					continue
+				}
+
+				links <- filteredLink
+			}
 
 		case <-idleTimer.C:
 			log.Println("Dispatcher Idle timeout reached, stoping dispatcher")
+
+			close(links)
+			close(taskResults)
+
 			return results
 		}
 
@@ -67,7 +83,7 @@ func (td *TaskDispactcher) filterLink(link *url.URL) *url.URL {
 		resolvedLink = td.startURL.ResolveReference(link)
 	}
 
-	_, visited := visitedLinks.Load(resolvedLink)
+	_, visited := visitedLinks.Load(resolvedLink.String())
 	if visited || resolvedLink.Host != td.startURL.Host {
 		return nil
 	}
@@ -75,18 +91,13 @@ func (td *TaskDispactcher) filterLink(link *url.URL) *url.URL {
 	return resolvedLink
 }
 
-func (td *TaskDispactcher) runTaskAsync(url *url.URL, links chan *url.URL, results chan TaskResult) {
-	startURLTask := Task{
-		url:     url,
-		links:   links,
-		results: results,
-
-		wc: td.wc,
+func (td *TaskDispactcher) startTasks(links chan *url.URL, results chan TaskResult) {
+	for count := 0; count <= td.maxWorkers; count++ {
+		task := Task{links: links, results: results, wc: td.wc}
+		go task.Run()
 	}
-
-	go startURLTask.Run()
 }
 
-func NewTaskDispactcher(startURL *url.URL, wc crawler.WebCrawler) *TaskDispactcher {
-	return &TaskDispactcher{startURL: startURL, wc: wc}
+func NewTaskDispactcher(startURL *url.URL, maxWorkers int, wc crawler.WebCrawler) *TaskDispactcher {
+	return &TaskDispactcher{startURL: startURL, maxWorkers: maxWorkers, wc: wc}
 }

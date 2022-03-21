@@ -21,7 +21,7 @@ func (wc *StdWebCrawler) Crawl(link *url.URL) ([]*url.URL, error) {
 	body, err := wc.hs.GetHTML(link)
 
 	if err != nil {
-		log.Printf("Error retrieving html from %s, error = %s", link, err.Error())
+		log.Printf("Error retrieving html from %s, error = %s", link, err)
 		return emptyLinks, err
 	}
 
