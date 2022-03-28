@@ -14,7 +14,8 @@ const (
 )
 
 var (
-	visitedLinks sync.Map
+	visitedLinks        sync.Map
+	currentTargetWorker int
 )
 
 func resetTimer(timer *time.Timer) {
@@ -23,33 +24,28 @@ func resetTimer(timer *time.Timer) {
 }
 
 type TaskDispactcher struct {
-	startURL   *url.URL
-	maxWorkers int
+	startURL       *url.URL
+	workerChannels []chan *url.URL
+	maxWorkers     int
 
 	wc crawler.WebCrawler
 }
 
 func (td *TaskDispactcher) Start() []TaskResult {
-	results := []TaskResult{}
+	results := make([]TaskResult, 0, td.maxWorkers)
+	taskResults := make(chan TaskResult, td.maxWorkers)
 
-	links := make(chan *url.URL)
-	taskResults := make(chan TaskResult)
-
-	td.startTasks(links, taskResults)
-
-	links <- td.startURL
+	td.startTasks(taskResults)
+	td.publishToTask(td.startURL)
 
 	idleTimer := time.NewTimer(idleTimeout)
 	for {
 		select {
-
 		case taskResult := <-taskResults:
 			resetTimer(idleTimer)
 
-			log.Printf("Got result = %+v", taskResult)
-
 			if taskResult.retry {
-				links <- taskResult.url
+				td.publishToTask(taskResult.url)
 				break
 			}
 
@@ -62,18 +58,13 @@ func (td *TaskDispactcher) Start() []TaskResult {
 					continue
 				}
 
-				links <- filteredLink
+				td.publishToTask(filteredLink)
 			}
 
 		case <-idleTimer.C:
 			log.Println("Dispatcher Idle timeout reached, stoping dispatcher")
-
-			close(links)
-			close(taskResults)
-
 			return results
 		}
-
 	}
 }
 
@@ -91,13 +82,33 @@ func (td *TaskDispactcher) filterLink(link *url.URL) *url.URL {
 	return resolvedLink
 }
 
-func (td *TaskDispactcher) startTasks(links chan *url.URL, results chan TaskResult) {
-	for count := 0; count <= td.maxWorkers; count++ {
+func (td *TaskDispactcher) startTasks(results chan TaskResult) {
+	for count := 0; count < td.maxWorkers; count++ {
+		links := make(chan *url.URL)
+		td.workerChannels[count] = links
+
 		task := Task{links: links, results: results, wc: td.wc}
-		go task.Run()
+		task.Run()
+	}
+}
+
+func (td *TaskDispactcher) publishToTask(link *url.URL) {
+	workerChannel := td.workerChannels[currentTargetWorker]
+
+	go func(link *url.URL, workerChannel chan *url.URL) {
+		workerChannel <- link
+	}(link, workerChannel)
+
+	if currentTargetWorker++; currentTargetWorker > len(workerChannel)-1 {
+		currentTargetWorker = 0
 	}
 }
 
 func NewTaskDispactcher(startURL *url.URL, maxWorkers int, wc crawler.WebCrawler) *TaskDispactcher {
-	return &TaskDispactcher{startURL: startURL, maxWorkers: maxWorkers, wc: wc}
+	return &TaskDispactcher{
+		startURL:       startURL,
+		workerChannels: make([]chan *url.URL, maxWorkers),
+		maxWorkers:     maxWorkers,
+		wc:             wc,
+	}
 }

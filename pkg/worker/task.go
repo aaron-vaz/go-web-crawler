@@ -43,24 +43,26 @@ type Task struct {
 }
 
 func (t Task) Run() {
-	for link := range t.links {
-		log.Printf("Crawling %s", link)
-		links, err := t.wc.Crawl(link)
+	go func() {
+		for link := range t.links {
+			log.Printf("Crawling %s", link)
+			links, err := t.wc.Crawl(link)
 
-		if errors.Is(err, httpservice.TooManyRequestsError) {
-			time.Sleep(backOffTimeout)
+			if errors.Is(err, httpservice.TooManyRequestsError) {
+				time.Sleep(backOffTimeout)
 
-			// if we are enable to continue due to rate limiting then we should sleep for a bit
-			// after the sleep we return the same link again so that it can be tried again
-			t.results <- TaskResult{url: link, retry: true}
-			continue
+				// if we are enable to continue due to rate limiting then we should sleep for a bit
+				// after the sleep we return the same link again so that it can be tried again
+				t.results <- TaskResult{url: link, retry: true}
+				continue
+			}
+
+			if err != nil {
+				log.Printf("Unable to crawl url = %s", link)
+				continue
+			}
+
+			t.results <- TaskResult{url: link, links: links}
 		}
-
-		if err != nil {
-			log.Printf("Unable to crawl url = %s", link)
-			continue
-		}
-
-		t.results <- TaskResult{url: link, links: links}
-	}
+	}()
 }
